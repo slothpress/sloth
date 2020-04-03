@@ -5,9 +5,12 @@ namespace Sloth\Model;
 use Corcel\Model\Attachment;
 use Corcel\Model\Post as Corcel;
 use PostTypes\PostType;
+use Sloth\Facades\Configure;
+use Sloth\Field\CarbonFaker;
 use Sloth\Field\Image;
 use Corcel\Model\Meta\PostMeta;
 use Corcel\Model\Builder\PostBuilder;
+use Corcel\Acf\FieldFactory;
 
 class Model extends Corcel {
     protected $names = [];
@@ -18,6 +21,8 @@ class Model extends Corcel {
     public $post_content = ' ';
     protected $icon;
     protected $filtered = false;
+    public $admin_columns = [];
+    public $admin_columns_hidden = [];
 
     /**
      * @var array
@@ -119,6 +124,50 @@ class Model extends Corcel {
 
         $pt = new PostType( $names, $options, $labels );
 
+        $pt->columns()->add( $this->admin_columns );
+
+        $idx      = 2;
+        $order    = [];
+        $sortable = [];
+
+        foreach ( $this->admin_columns as $k => $v ) {
+            $class = self::class;
+
+            $pt->columns()->populate( $k,
+                function ( $column, $post_id ) use ( $class, $k ) {
+                    $r = call_user_func_array( [ $class, 'find' ], [ $post_id ] );
+                    echo call_user_func( [ $r, 'get' . ucfirst( $k ) . 'Column' ] );
+                } );
+
+            $sortable[ $k ] = $k;
+            $order[ $k ]    = $idx;
+            $idx            += 1;
+        }
+
+        $order['title'] = 1;
+        $order['date']  = $idx + 100;
+
+        $pt->columns()->order( $order );
+
+        $pt->columns()->sortable( $sortable );
+
+        $pt->columns()->hide( $this->admin_columns_hidden );
+
+        if ( in_array( 'title', $this->admin_columns_hidden ) ) {
+            $keys         = array_keys( $this->admin_columns );
+            $first_column = reset( $keys );
+            add_filter( 'list_table_primary_column',
+                function ( $default, $screen ) use ( $pt, $first_column ) {
+                    if ( 'edit-' . $pt->name === $screen ) {
+                        $default = $first_column;
+                    }
+
+                    return $default;
+                },
+                10,
+                2 );
+        }
+
         # fix for newer version of jjgrainger/PostTypes
         if ( method_exists( $pt, 'register' ) ) {
             $pt->register();
@@ -126,6 +175,7 @@ class Model extends Corcel {
         if ( method_exists( $pt, 'registerPostType' ) ) {
             $pt->registerPostType();
         }
+
     }
 
     /**
@@ -195,11 +245,23 @@ class Model extends Corcel {
     public function __get( $key ) {
         if ( function_exists( 'acf_maybe_get_field' ) ) {
             $acf = acf_maybe_get_field( $key, $this->getAttribute( 'ID' ), false );
+            if ( $acf ) {
+                if ( $acf['type'] === 'image' ) {
+                    $attachment = Attachment::find( parent::__get( $key ) );
+                    if ( is_object( $attachment ) ) {
+                        return new Image( $attachment->url );
+                    }
+                }
 
-            if ( $acf && $acf['type'] === 'image' ) {
-                $attachment = Attachment::find( parent::__get( $key ) );
-                if ( is_object( $attachment ) ) {
-                    return new Image( $attachment->url );
+
+                if ( Configure::check( 'sloth.acf.process' ) && Configure::read( 'sloth.acf.process' ) == true ) {
+                    if ( in_array( $acf['type'],
+                            [ 'date_picker', 'date_time_picker', 'time_picker' ] ) && empty( parent::__get( $key ) ) ) {
+                        return new CarbonFaker();
+                    }
+                    $field = FieldFactory::make( $key, $this );
+
+                    return $field ? $field->get() : null;
                 }
             }
         }
@@ -207,6 +269,22 @@ class Model extends Corcel {
         $value = parent::__get( $key );
 
         return $value;
+    }
+
+    public function getColumn( $which ) {
+        $value = $this->{$which} ?? $this->{strtolower( $which )};
+
+        return '<a href="' . get_edit_post_link( $this->ID ) . '">' . $value . '</a>';
+    }
+
+    public function __call( $method, $parameters ) {
+        $parts = preg_split( '/(?=[A-Z])/', $method );
+
+        if ( $parts[0] == 'get' && $parts[2] == 'Column' ) {
+            return $this->getColumn( $parts[1] );
+        }
+
+        return parent::__call( $method, $parameters );
     }
 
     /**
