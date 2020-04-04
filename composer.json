@@ -1,9 +1,10 @@
 {
   "name": "slothpress/sloth",
+  "license": "GPL-2.0-or-later",
   "authors": [
     {
       "name": "Ben Kremer",
-      "email": "hallo@benkremer.de"
+      "email": "ben@slothpress.org"
     }
   ],
   "require": {
